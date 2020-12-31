@@ -6,20 +6,21 @@
 ## **TEMPLATE REQUIREMENTS** 
 ## This template REQUIRES the following exisitng configuration:
 ##
-## 1. An existing CloudFront distribution configured with an AWS regional WAF protected 
+## - An existing CloudFront distribution configured with an AWS regional WAF protected 
 ## origin that is internet accessible.
 ##
-## 2. The CloudFront distribution has been prerconfigured with the origin custom header 
+## - The CloudFront distribution has been prerconfigured with the origin custom header 
 ## you plan to use for this template. This value must match the HeaderName value below.
 ##
-## 3. Add the Url for the origin resource (ALB/APIGW) below that is associated with the 
+## - Add the Url for the origin resource (ALB/APIGW) below that is associated with the 
 ## WAF ACL Id provided below for the WAFAclId parameter.
 ##
-## 4. Additional IAM permissions may be required if other rules are in scope for the target 
-## regional WAF web ACL update; see lines 218 - 221.
+## - A waf regex pattern to update the secrets
 ##
-## 5. Upload artifacts to in-region S3 location and update ArtifactsBucket and ArtifactsPrefix
+## - Upload artifacts to in-region S3 location and update ArtifactsBucket and ArtifactsPrefix
 ## parameters.
+##
+## - an existing AWS secret manager secret
 ##
 ## Changelog:
 ##  - Initial sample
@@ -33,17 +34,17 @@ Description: CloudFront - WAF - Secrets Manager - Demo
 
 ## Parameters
 Parameters:
-  WAFAclId:
+  OriginVerifySecretArn:
     AllowedPattern: ".+"
-    Description: Web ACL Id for REGIONAL AWS WAF that IS Associate with your CloudFront origin resource configured in the CFDistroId below.
+    Description: ARN of the secret that is going to be rotated.
     Type: String
-  WAFRulePriority:
-    Default: "0"
-    Description: Rule number to use for regional WAF web ACL. 0 is recommended.
-    Type: Number
-  WAFAclName:
+  WAFRegexPatternId:
     AllowedPattern: ".+"
-    Description: Web ACL Name for REGIONAL AWS WAF
+    Description: Web Regex Pattern Id tied to Regional WAF that tied to your CloudFront origin resource.
+    Type: String
+  WAFRegexPatternName:
+    AllowedPattern: ".+"
+    Description: Web ACL Name for REGIONAL AWS WAF Regex Pattern
     Type: String
   CFDistroId:
     AllowedPattern: ".+"
@@ -59,20 +60,19 @@ Parameters:
     Type: Number
     MinValue: "1"
   HeaderName:
-    Default: X-Origin-Verify
+    Default: "x-origin-verify"
     Description: Header name for secret string.
     Type: String
   ArtifactsBucket:
     Description: S3 bucket with artifact files (Lambda functions, templates, html files, etc.).
     Type: String
-    Default: 
-    AllowedPattern: ^[0-9a-zA-Z]+([0-9a-zA-Z-]*[0-9a-zA-Z])*$
+    Default: ''
+    AllowedPattern: ^[0-9a-zA-Z]+([0-9a-zA-Z-.]*[0-9a-zA-Z])*$
     ConstraintDescription: ArtifactsBucket S3 bucket name can include numbers, lowercase letters, uppercase letters, and hyphens (-).
       It cannot start or end with a hyphen (-).
   ArtifactsPrefix:
     Description: Path in the S3 bucket containing artifact files. Must be in-region.
     Type: String
-    Default: /
     AllowedPattern: ^[0-9a-zA-Z-/]*$
     ConstraintDescription: ArtifactsPrefix key prefix can include numbers, lowercase letters, uppercase letters, hyphens (-),
       and forward slash (/). Must be in-region.
@@ -83,13 +83,13 @@ Metadata:
     - Label:
         default: Main Configuration
       Parameters:
-      - WAFAclName
-      - WAFAclId
-      - WAFRulePriority
+      - WAFRegexPatternName
+      - WAFRegexPatternId
       - CFDistroId
       - OriginUrl
       - HeaderName
       - RotateInterval
+      - OriginVerifySecretArn
     - Label:
         default: Artifact Configuration
       Parameters:
@@ -100,30 +100,22 @@ Metadata:
         Description: Rotation interval in days for origin secret value. Full rotation requires 2 intervals.
       HeaderName:
         Description: Header name for secret string.
-      WAFAclName:
+      WAFRegexPatternName:
         Description: Web ACL Name for REGIONAL AWS WAF
       CFDistroId:
         Description: Cloudfront distribution Id with origin already containing custom header.
       OriginUrl:
         Description: Origin URL being protected by the regional AWS WAF. e.g. http://www.example.com
-      WAFRulePriority:
-        Description: Rule number to use for regional WAF web ACL. 0 is recommended.
       ArtifactsBucket:
         Description: S3 bucket with artifact files (Lambda functions, templates, html files, etc.).
       ArtifactsPrefix:
         Description: Path in the S3 bucket containing artifact files.
+      OriginVerifySecretArn:
+        Description: ARN of the secret that is going to be rotated.
 
 ## Resources
 
 Resources:
-
-  OriginVerifySecret:
-    Type: 'AWS::SecretsManager::Secret'
-    Properties:
-      GenerateSecretString:
-        SecretStringTemplate: !Sub '{"HEADERVALUE": "RandomPassword"}'
-        GenerateStringKey: "HEADERVALUE"
-        ExcludePunctuation: true
 
   RotateFunctionInvokePermission:
     Type: AWS::Lambda::Permission
@@ -138,7 +130,7 @@ Resources:
       RotationLambdaARN: !GetAtt OriginSecretRotateFunction.Arn
       RotationRules: 
         AutomaticallyAfterDays: !Ref RotateInterval
-      SecretId: !Ref OriginVerifySecret
+      SecretId: !Ref OriginVerifySecretArn
 
   PythonRequestsLayer:
     Type: AWS::Lambda::LayerVersion
@@ -161,16 +153,15 @@ Resources:
         - !Ref PythonRequestsLayer
       Environment:
         Variables:
-          WAFACLID: !Ref WAFAclId
-          WAFACLNAME: !Ref WAFAclName
-          WAFRULEPRI: !Ref WAFRulePriority
+          WAFREGEXPATTERNID: !Ref WAFRegexPatternId
+          WAFREGEXPATTERNNAME: !Ref WAFRegexPatternName
           CFDISTROID: !Ref CFDistroId
           HEADERNAME: !Ref HeaderName
           ORIGINURL: !Ref OriginUrl
           STACKNAME: !Ref AWS::StackName
           AWSREGION: !Ref AWS::Region
       Role: !GetAtt OriginSecretRotateExecutionRole.Arn
-      Timeout: 300
+      Timeout: 900
       Code:
         S3Bucket: !Ref ArtifactsBucket
         S3Key: !Sub ${ArtifactsPrefix}origin-secret-rotate.zip
@@ -196,14 +187,14 @@ Resources:
             - logs:CreateLogStream
             - logs:PutLogEvents
             - logs:DescribeLogStreams
-            Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*OriginSecretRotateFunction*'
+            Resource: '*'
           - Effect: Allow
             Action:
             - secretsmanager:DescribeSecret
             - secretsmanager:GetSecretValue
             - secretsmanager:PutSecretValue
             - secretsmanager:UpdateSecretVersionStage
-            Resource: !Ref OriginVerifySecret
+            Resource: !Ref OriginVerifySecretArn
           - Effect: Allow
             Action:
             - secretsmanager:GetRandomPassword
@@ -218,7 +209,7 @@ Resources:
           - Effect: Allow
             Action:
             - wafv2:*
-            Resource: !Sub 'arn:aws:wafv2:${AWS::Region}:${AWS::AccountId}:regional/webacl/${WAFAclName}/${WAFAclId}'
+            Resource: !Sub 'arn:aws:wafv2:${AWS::Region}:${AWS::AccountId}:regional/regexpatternset/${WAFRegexPatternName}/${WAFRegexPatternId}'
 
 ## Outputs
 Outputs:
@@ -234,12 +225,12 @@ Outputs:
   OriginSecretRotateFunction:
     Value: !Sub https://console.aws.amazon.com/lambda/home?region=${AWS::Region}#/functions/${OriginSecretRotateFunction}
     Description: Secrets Manager Rotation Lambda Function
-  cfDistro:
-    Description: CloudFront distribution associated with orgin URL
-    Value: !Sub https://console.aws.amazon.com/cloudfront/home?region=${AWS::Region}#distribution-settings:${CFDistroId}
-  OriginVerifySecret:
-    Description: Secrets Manager Secret for Origin Validation 
-    Value: !Sub https://console.aws.amazon.com/secretsmanager/home?region=${AWS::Region}#/secret?name=${OriginVerifySecret}
-  wafWebACLR:
-    Description: Regional WAF Web ACL associated with origin
-    Value: !Join ['', ['https://console.aws.amazon.com/wafv2/homev2/web-acl/', !Ref 'WAFAclName', '/', !Ref WAFAclId, '/overview?region=', !Sub '${AWS::Region}']]
+  # cfDistro:
+  #   Description: CloudFront distribution associated with orgin URL
+  #   Value: !Sub https://console.aws.amazon.com/cloudfront/home?region=${AWS::Region}#distribution-settings:${CFDistroId}
+  # OriginVerifySecret:
+  #   Description: Secrets Manager Secret for Origin Validation 
+  #   Value: !Sub https://console.aws.amazon.com/secretsmanager/home?region=${AWS::Region}#/secret?name=${OriginVerifySecret}
+  # wafWebACLR:
+  #   Description: Regional WAF Web ACL associated with origin
+  #   Value: !Join ['', ['https://console.aws.amazon.com/wafv2/homev2/web-acl/', !Ref 'WAFRegexPatternName', '/', !Ref WAFRegexPatternId, '/overview?region=', !Sub '${AWS::Region}']]
