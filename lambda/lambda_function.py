@@ -10,129 +10,53 @@ import time
 from botocore.exceptions import ClientError
 
 logger = logging.getLogger()
-
 logger.setLevel(logging.INFO)
 
 
-#======================================================================================================================
+# ======================================================================================================================
 # Variables
-#======================================================================================================================
+# ======================================================================================================================
 
 
-WafAclName = os.environ['WAFACLNAME']
-WafAclId = os.environ['WAFACLID']
-WAFRulePriority = os.environ['WAFRULEPRI']
+# WafAclName = os.environ['WAFACLNAME']
+# WafAclId = os.environ['WAFACLID']
+# WAFRulePriority = os.environ['WAFRULEPRI']
 CFDistroId = os.environ['CFDISTROID']
 HeaderName = os.environ['HEADERNAME']
 OriginUrl = os.environ['ORIGINURL']
 StackName = os.environ['STACKNAME']
+RegexPatternId = os.environ['WAFREGEXPATTERNID']
+RegexPatternName = os.environ['WAFREGEXPATTERNNAME']
 
-
-#======================================================================================================================
+# ======================================================================================================================
 # Helpers
-#======================================================================================================================
+# ======================================================================================================================
 
 
-def get_wafacl():
-    client = boto3.client('wafv2')
-    response = client.get_web_acl(
-        Name = WafAclName,
-        Scope = 'REGIONAL',
-        Id = WafAclId,
-        )
-    return response
-
-
-def update_wafacl(NewSecret, PrevSecret):
+def update_waf_pattern(secretStrings):
     client = boto3.client('wafv2')
 
-    currwafrules = get_wafacl()
-    locktoken = currwafrules['LockToken']
-
-    newwafrules = [
-        {
-        'Name': StackName + 'XOriginVerify',
-        'Priority': int(WAFRulePriority),
-        'Action': {
-            'Allow': {
-            }
-        },
-        'VisibilityConfig': {
-        'SampledRequestsEnabled': True,
-        'CloudWatchMetricsEnabled': True,
-        'MetricName': StackName + 'XOriginVerify'
-        },
-        'Statement': {
-            'OrStatement': {
-                'Statements': [
-                    {
-                    'ByteMatchStatement': {
-                        'FieldToMatch': {
-                        'SingleHeader': {
-                            'Name': HeaderName
-                        }
-                        },
-                        'PositionalConstraint': 'EXACTLY',
-                        'SearchString': NewSecret,
-                        'TextTransformations': [
-                        {
-                            'Type': 'NONE',
-                            'Priority': 0
-                        }
-                        ]
-                    }
-                    },
-                    {
-                    'ByteMatchStatement': {
-                        'FieldToMatch': {
-                        'SingleHeader': {
-                            'Name': HeaderName
-                        }
-                        },
-                        'PositionalConstraint': 'EXACTLY',
-                        'SearchString': PrevSecret,
-                        'TextTransformations': [
-                        {
-                            'Type': 'NONE',
-                            'Priority': 0
-                        }
-                        ]
-                    }
-                    }
-                ]
-                }
-            }
-        }
-    ]
-
-    for r in currwafrules['WebACL']['Rules']:
-        if int(WAFRulePriority) != int(r['Priority']):
-            newwafrules.append(r)
-    
-    logger.info("Update WAF WebACL Id, %s." % WafAclId)
-    response = client.update_web_acl(
-    Name = WafAclName,
-    Scope = 'REGIONAL',
-    Id = WafAclId,
-    DefaultAction={
-        'Block': {}
-        },
-    Description='CloudFront Origin Verify Sample',
-    LockToken = locktoken,
-    VisibilityConfig={
-        'SampledRequestsEnabled': True|False,
-        'CloudWatchMetricsEnabled': True|False,
-        'MetricName': StackName + 'OriginVerify'
-    },
-    Rules = newwafrules
+    regex_pattern_set = client.get_regex_pattern_set(
+        Name=RegexPatternName,
+        Scope='REGIONAL',
+        Id=RegexPatternId
     )
-
+    regex_string_array = [{'RegexString': string} for string in secretStrings]
+    logging.info(f"about to update pattern with array {json.dumps(regex_string_array)}")
+    client.update_regex_pattern_set(
+        Name=RegexPatternName, 
+        Scope='REGIONAL',
+        Id=RegexPatternId, 
+        Description=regex_pattern_set['RegexPatternSet']['Description'],
+        RegularExpressionList=regex_string_array,
+        LockToken=regex_pattern_set['LockToken']
+        )
 
 def get_cfdistro(distroid):
     client = boto3.client('cloudfront')
     response = client.get_distribution(
-        Id = distroid
-        )
+        Id=distroid
+    )
 
     return response
 
@@ -140,61 +64,67 @@ def get_cfdistro(distroid):
 def get_cfdistro_config(distroid):
     client = boto3.client('cloudfront')
     response = client.get_distribution_config(
-        Id = distroid
-        )
+        Id=distroid
+    )
 
     return response
 
 
 def update_cfdistro(distroid, headervalue):
-    
+
     client = boto3.client('cloudfront')
     diststatus = get_cfdistro(distroid)
     if 'Deployed' in diststatus['Distribution']['Status']:
         distconfig = get_cfdistro_config(distroid)
         headercount = 0
-        #logger.info(distconfig)
+        # logger.info(distconfig)
         for k in distconfig['DistributionConfig']['Origins']['Items']:
             if k['CustomHeaders']['Quantity'] > 0:
                 for h in k['CustomHeaders']['Items']:
                     if HeaderName in h['HeaderName']:
-                        logger.info("Update custom header, %s for origin, %s." % (h['HeaderName'], k['Id']))
+                        logger.info("Update custom header, %s for origin, %s." % (
+                            h['HeaderName'], k['Id']))
                         headercount = headercount + 1
                         h['HeaderValue'] = headervalue
-                    
+
                     else:
-                        logger.info("Ignore custom header, %s for origin, %s." % (h['HeaderName'], k['Id']))
+                        logger.info("Ignore custom header, %s for origin, %s." % (
+                            h['HeaderName'], k['Id']))
                         pass
 
             else:
                 logger.info("No custom headers found in origin, %s." % k['Id'])
                 pass
-        
+
         if headercount < 1:
-            logger.error("No custom header, %s found in distribution Id, %s." % (HeaderName, distroid))
-            raise ValueError("No custom header found in distribution Id, %s." % distroid)
-        
+            logger.error("No custom header, %s found in distribution Id, %s." % (
+                HeaderName, distroid))
+            raise ValueError(
+                "No custom header found in distribution Id, %s." % distroid)
+
         else:
             response = client.update_distribution(
-                Id = distroid,
-                IfMatch = distconfig['ResponseMetadata']['HTTPHeaders']['etag'],
-                DistributionConfig = distconfig['DistributionConfig']
-                )
+                Id=distroid,
+                IfMatch=distconfig['ResponseMetadata']['HTTPHeaders']['etag'],
+                DistributionConfig=distconfig['DistributionConfig']
+            )
 
             return response
-                
+
     else:
         logger.error("Distribution Id, %s status is not Deployed." % distroid)
-        raise ValueError("Distribution Id, %s status is not Deployed." % distroid)
+        raise ValueError(
+            "Distribution Id, %s status is not Deployed." % distroid)
 
 
 def test_origin(url, secret):
     response = requests.get(
-    url,
-    headers={HeaderName: secret},
+        url,
+        headers={HeaderName: secret},
     )
-    
-    logger.info("Testing URL, %s - response code, %s " % (url, response.status_code))
+
+    logger.info("Testing URL, %s - response code, %s " %
+                (url, response.status_code))
 
     if response.status_code == 200:
         return True
@@ -215,34 +145,35 @@ def create_secret(service_client, arn, token):
     """
     # Make sure the current secret exists
     service_client.get_secret_value(
-        SecretId=arn, 
+        SecretId=arn,
         VersionStage="AWSCURRENT"
-        )
+    )
 
     # Now try to get the secret version, if that fails, put a new secret
     try:
         service_client.get_secret_value(
-            SecretId=arn, 
-            VersionId=token, 
+            SecretId=arn,
+            VersionId=token,
             VersionStage="AWSPENDING"
-            )
+        )
         logger.info("createSecret: Successfully retrieved secret for %s." % arn)
 
     except service_client.exceptions.ResourceNotFoundException:
 
         # Generate a random password
         passwd = service_client.get_random_password(
-            ExcludePunctuation = True
-            )
+            ExcludePunctuation=True
+        )
 
         # Put the secret
         service_client.put_secret_value(
-            SecretId=arn, 
-            ClientRequestToken=token, 
+            SecretId=arn,
+            ClientRequestToken=token,
             SecretString='{\"HEADERVALUE\":\"%s\"}' % passwd['RandomPassword'],
             VersionStages=['AWSPENDING'])
 
-        logger.info("createSecret: Successfully put secret for ARN %s and version %s." % (arn, token))
+        logger.info(
+            "createSecret: Successfully put secret for ARN %s and version %s." % (arn, token))
 
 
 def set_secret(service_client, arn, token):
@@ -259,16 +190,18 @@ def set_secret(service_client, arn, token):
     # First check to confirm CloudFront distribution is in Deployed state
     diststatus = get_cfdistro(CFDistroId)
     if 'Deployed' not in diststatus['Distribution']['Status']:
-        logger.error("Distribution Id, %s status is not Deployed." % CFDistroId)
-        raise ValueError("Distribution Id, %s status is not Deployed." % CFDistroId)
-    
+        logger.error("Distribution Id, %s status is not Deployed." %
+                     CFDistroId)
+        raise ValueError(
+            "Distribution Id, %s status is not Deployed." % CFDistroId)
+
     # Obtain secret value for AWSPENDING
     pending = service_client.get_secret_value(
-        SecretId=arn, 
-        VersionId=token, 
+        SecretId=arn,
+        VersionId=token,
         VersionStage="AWSPENDING"
-        )
-    
+    )
+
     # Obtain secret value for AWSCURRENT
     metadata = service_client.describe_secret(SecretId=arn)
     for version in metadata["VersionIdsToStages"]:
@@ -276,27 +209,27 @@ def set_secret(service_client, arn, token):
         if "AWSCURRENT" in metadata["VersionIdsToStages"][version]:
             currenttoken = version
             current = service_client.get_secret_value(
-            SecretId=arn, 
-            VersionId=currenttoken, 
-            VersionStage="AWSCURRENT"
+                SecretId=arn,
+                VersionId=currenttoken,
+                VersionStage="AWSCURRENT"
             )
 
     pendingsecret = json.loads(pending['SecretString'])
     currentsecret = json.loads(current['SecretString'])
-    
+
     # Update CloudFront custom header and regional WAF WebACL rule with AWSPENDING and AWSCURRENT
     try:
-
-        update_wafacl(pendingsecret['HEADERVALUE'], currentsecret['HEADERVALUE'])
+        update_waf_pattern([pendingsecret['HEADERVALUE'], currentsecret['HEADERVALUE']])
 
         # Sleep for 75 seconds for regional WAF config propagation
         time.sleep(75)
 
         update_cfdistro(CFDistroId, pendingsecret['HEADERVALUE'])
-    
+
     except ClientError as e:
         logger.error('Error: {}'.format(e))
-        raise ValueError("Failed to update resources CloudFront Distro Id %s , WAF WebACL Id %s " % (CFDistroId, WafAclId))
+        raise ValueError("Failed to update resources CloudFront Distro Id %s , WAF WebACL Id %s " % (
+            CFDistroId, RegexPatternId))
 
 
 def test_secret(service_client, arn, token):
@@ -313,9 +246,9 @@ def test_secret(service_client, arn, token):
 
     # Obtain secret value for AWSPENDING
     pending = service_client.get_secret_value(
-    SecretId=arn, 
-    VersionId=token, 
-    VersionStage="AWSPENDING"
+        SecretId=arn,
+        VersionId=token,
+        VersionStage="AWSPENDING"
     )
 
     # Obtain secret value for AWSCURRENT
@@ -324,9 +257,9 @@ def test_secret(service_client, arn, token):
         if "AWSCURRENT" in metadata["VersionIdsToStages"][version]:
             currenttoken = version
             current = service_client.get_secret_value(
-            SecretId=arn, 
-            VersionId=currenttoken, 
-            VersionStage="AWSCURRENT"
+                SecretId=arn,
+                VersionId=currenttoken,
+                VersionStage="AWSCURRENT"
             )
             logger.info("Getting current version %s for %s" % (version, arn))
 
@@ -366,19 +299,39 @@ def finish_secret(service_client, arn, token):
         if "AWSCURRENT" in metadata["VersionIdsToStages"][version]:
             if version == token:
                 # The correct version is already marked as current, return
-                logger.info("finishSecret: Version %s already marked as AWSCURRENT for %s" % (version, arn))
+                logger.info(
+                    "finishSecret: Version %s already marked as AWSCURRENT for %s" % (version, arn))
                 return
             current_version = version
             break
 
+
+    pending = service_client.get_secret_value(
+        SecretId=arn,
+        VersionId=token,
+        VersionStage="AWSPENDING"
+    )
+    pendingsecret = json.loads(pending['SecretString'])
+
+    #wait for cloudfront to be deployed before removing the old secret
+    status = None
+    while status != "Deployed":
+      time.sleep(20)
+      diststatus = get_cfdistro(CFDistroId)
+      status = diststatus['Distribution']['Status']
+      logging.info(f"dist status is {status}")
+
+    update_waf_pattern([pendingsecret['HEADERVALUE']])
     # Finalize by staging the secret version current
-    service_client.update_secret_version_stage(SecretId=arn, VersionStage="AWSCURRENT", MoveToVersionId=token, RemoveFromVersionId=current_version)
-    logger.info("finishSecret: Successfully set AWSCURRENT stage to version %s for secret %s." % (token, arn))
+    service_client.update_secret_version_stage(
+        SecretId=arn, VersionStage="AWSCURRENT", MoveToVersionId=token, RemoveFromVersionId=current_version)
+    logger.info(
+        "finishSecret: Successfully set AWSCURRENT stage to version %s for secret %s." % (token, arn))
 
 
-#======================================================================================================================
+# ======================================================================================================================
 # Lambda entry point
-#======================================================================================================================
+# ======================================================================================================================
 
 
 def lambda_handler(event, context):
@@ -398,14 +351,19 @@ def lambda_handler(event, context):
         raise ValueError("Secret %s is not enabled for rotation" % arn)
     versions = metadata['VersionIdsToStages']
     if token not in versions:
-        logger.error("Secret version %s has no stage for rotation of secret %s." % (token, arn))
-        raise ValueError("Secret version %s has no stage for rotation of secret %s." % (token, arn))
+        logger.error(
+            "Secret version %s has no stage for rotation of secret %s." % (token, arn))
+        raise ValueError(
+            "Secret version %s has no stage for rotation of secret %s." % (token, arn))
     if "AWSCURRENT" in versions[token]:
-        logger.info("Secret version %s already set as AWSCURRENT for secret %s." % (token, arn))
+        logger.info(
+            "Secret version %s already set as AWSCURRENT for secret %s." % (token, arn))
         return
     elif "AWSPENDING" not in versions[token]:
-        logger.error("Secret version %s not set as AWSPENDING for rotation of secret %s." % (token, arn))
-        raise ValueError("Secret version %s not set as AWSPENDING for rotation of secret %s." % (token, arn))
+        logger.error(
+            "Secret version %s not set as AWSPENDING for rotation of secret %s." % (token, arn))
+        raise ValueError(
+            "Secret version %s not set as AWSPENDING for rotation of secret %s." % (token, arn))
 
     if step == "createSecret":
         create_secret(service_client, arn, token)
@@ -421,3 +379,6 @@ def lambda_handler(event, context):
 
     else:
         raise ValueError("Invalid step parameter")
+
+
+update_waf_pattern(["RandomString"])
