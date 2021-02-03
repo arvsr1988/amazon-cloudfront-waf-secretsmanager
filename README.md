@@ -1,3 +1,40 @@
+# Introduction
+
+This is a fork of the AWS example at https://github.com/aws-samples/amazon-cloudfront-waf-secretsmanager to setup a secret rotation lambda. 
+
+## Change from the official repo
+
+The main reason changes were made was so that a terraform run with the cloudformation template should not provision any chnage. Details.
+
+- WAF Regex pattern updated instead of changing the WAF rule each time in order to keep the value of the secret independent of the WAF. This will allow for changes in the WAF rule to stay independent of the secret value
+- Provided a terraform module to upload the lambda secret code and create the lambda functions ontop of the cloudformation template
+- Removed the creation of secret from the cloudformation template 
+
+## usage
+### Via terraform 
+```
+module "secret-rotation"{
+  source= "https://github.com/arvsr1988/amazon-cloudfront-waf-secretsmanager"
+  s3_bucket_for_lambda = "<bucket to upload lambda code>"
+  s3_prefix_for_lambda = "<object prefix>"
+  origin_url = "<url on your alb that can be hit for testing>"
+  cloudfront_distribution_id = <id of the cloudfront distribution>
+  waf_regex_pattern_name = <name of waf regex pattern set>
+  waf_regex_pattern_id = <name of waf regex pattern set>
+  secret_arn = <secret manager arn>
+
+  #optional
+  header_name = "<name of header used to send the secret from cloudfront to alb. defaults to x-origin-verify>"
+}
+```
+
+### Via cloudformation
+
+- use the template in templates/cf-origin-verify-sm-only.yaml and supply the necessary paramters
+
+
+# Original Documentation from AWS 
+
 ## Enhance Amazon CloudFront Origin Security with AWS WAF and AWS Secrets Manager
 
 This repository includes a sample solution you can deploy to see how its components integrate to implement the origin access restriction. The sample solution includes a web server deployed on Amazon EC2 Linux instances running in an Amazon EC2 Autoscaling group. Elastic Load Balancing distributes the incoming application traffic across the EC2 instances using an ALB. The ALB is associated with an AWS WAF web access control list (ACL) which is used to validate the incoming origin requests. Finally, a CloudFront distribution is deployed with an AWS WAF web ACL and configured to point to the origin ALB.
