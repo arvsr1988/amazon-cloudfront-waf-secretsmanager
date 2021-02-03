@@ -66,7 +66,6 @@ Parameters:
   ArtifactsBucket:
     Description: S3 bucket with artifact files (Lambda functions, templates, html files, etc.).
     Type: String
-    Default: ''
     AllowedPattern: ^[0-9a-zA-Z]+([0-9a-zA-Z-.]*[0-9a-zA-Z])*$
     ConstraintDescription: ArtifactsBucket S3 bucket name can include numbers, lowercase letters, uppercase letters, and hyphens (-).
       It cannot start or end with a hyphen (-).
@@ -225,12 +224,6 @@ Outputs:
   OriginSecretRotateFunction:
     Value: !Sub https://console.aws.amazon.com/lambda/home?region=${AWS::Region}#/functions/${OriginSecretRotateFunction}
     Description: Secrets Manager Rotation Lambda Function
-  # cfDistro:
-  #   Description: CloudFront distribution associated with orgin URL
-  #   Value: !Sub https://console.aws.amazon.com/cloudfront/home?region=${AWS::Region}#distribution-settings:${CFDistroId}
-  # OriginVerifySecret:
-  #   Description: Secrets Manager Secret for Origin Validation 
-  #   Value: !Sub https://console.aws.amazon.com/secretsmanager/home?region=${AWS::Region}#/secret?name=${OriginVerifySecret}
-  # wafWebACLR:
-  #   Description: Regional WAF Web ACL associated with origin
-  #   Value: !Join ['', ['https://console.aws.amazon.com/wafv2/homev2/web-acl/', !Ref 'WAFRegexPatternName', '/', !Ref WAFRegexPatternId, '/overview?region=', !Sub '${AWS::Region}']]
+  OriginSecretRotateFunctionArn:
+    Value: !Sub ${OriginSecretRotateFunction.Arn}
+    Description: Secrets Manager Rotation Lambda Function
