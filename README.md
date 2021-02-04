@@ -4,11 +4,11 @@ This is a fork of the AWS example at https://github.com/aws-samples/amazon-cloud
 
 ## Change from the official repo
 
-The main reason changes were made was so that a terraform run with the cloudformation template should not provision any chnage. Details.
+The main reason changes were made was so that a terraform run with the cloudformation template should not provision any change. Changes made were:
 
-- WAF Regex pattern updated instead of changing the WAF rule each time in order to keep the value of the secret independent of the WAF. This will allow for changes in the WAF rule to stay independent of the secret value
-- Provided a terraform module to upload the lambda secret code and create the lambda functions ontop of the cloudformation template
-- Removed the creation of secret from the cloudformation template 
+- Used a WAF Regex pattern updated instead of changing the WAF rule each time in order to keep the value of the secret independent of the WAF rule. This will allow for changes in the WAF rule to stay independent of changes to the secret value
+- Provided a terraform module to upload the lambda code.
+- Removed the creation of secret from the cloudformation template so that the secret can be referenced in the waf regex pattern.
 
 ## usage
 ### Via terraform 
